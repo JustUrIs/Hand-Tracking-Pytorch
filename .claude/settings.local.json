@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(pip show torch torchvision opencv-python 2>&1)",
+      "Bash(pip install *)",
+      "Bash(python -c \"import gdown; print\\('gdown available'\\)\")",
+      "Bash(python -m gdown \"1bmWjiUp1Lq9ggnsOGAugxVz4GROcR2VO\" -O model/model_all_40.pth)",
+      "Bash(python -c \"import torch; print\\('CUDA available:', torch.cuda.is_available\\(\\)\\); print\\('GPU:', torch.cuda.get_device_name\\(0\\) if torch.cuda.is_available\\(\\) else 'None'\\)\")",
+      "Bash(python -c \"import cv2; import mediapipe; print\\('OK'\\)\")",
+      "Bash(python -c \"import mediapipe as mp; print\\(dir\\(mp\\)\\)\")",
+      "Bash(python -c \"from mediapipe.tasks.python import vision; print\\(dir\\(vision\\)\\)\")",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

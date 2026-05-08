@@ -1,170 +1,100 @@
-import numpy as np
 import cv2
-import math
-import time
+import mediapipe as mp
+from mediapipe.tasks.python import vision as mp_vision
+from mediapipe.tasks.python.vision import HandLandmarker, HandLandmarkerOptions, RunningMode
+from mediapipe.tasks.python import BaseOptions
 
-from hand_detector_utils import *
-# from hand_classification_net import *
+MODEL_PATH = "model/hand_landmarker.task"
 
-import torch
+FINGER_TIPS = [8, 12, 16, 20]
+FINGER_PIPS = [6, 10, 14, 18]
 
-#%% Settings
-
-# Use 0 if you use the laptot camera. 
-#If you use a software to split the video source or similar try 1, 2 etc. (Start with 1)
-default_device = 1 
-
-# If you only want to test this program without the Unity application set to True to obtain a mirrored feedback
-# If you use a third party application to split the video source use that application to obtain the mirror effetct and set this variable to False
-flip_frame = True
-if(default_device == 1): flip_frame = False
-
-#%% Other variables (don't modify)
-
-
-# Counter use to FPS improvement
-counter = 0
-
-# Variable to save the hand image
-hand1 = np.zeros((10, 10, 3))
-hand2 = np.zeros((10, 10, 3))
-
-# Predictions regarding the actual frame of the number of finger per hand
-finger_predicts_1 = -1
-finger_predicts_2 = -1
-
-# Tracking of fingers counter of the two hands. Use to decide wich command send
-finger_list_1 = []
-finger_list_2 = []
-
-# Flip the image of left hand to improve classifier performance
-flip_hand_1 = True
-
-#%%
-# Load NN
-device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
-hand_tracker = torch.load("model/model_all_40.pth")
-hand_tracker.to(device)
-hand_tracker.eval()
-
-finger_counter = torch.load("model/CNN_250_140.pth")
-# finger_counter = CNNModel()
-# finger_counter.load_state_dict(torch.load("model/model_chk.pt"))
-finger_counter.to(device)
-finger_counter.eval()
-
-#%%
-
-# Open Camera
-try:
-    capture = cv2.VideoCapture(default_device)
-    # capture = cv2.VideoCapture(cv2.CAP_DSHOW)
-except:
-    print("No Camera Source Found!")
-    
-
-for i in range(15): ret, frame = capture.read()
+# Connections for drawing (pairs of landmark indices)
+HAND_CONNECTIONS = [
+    (0,1),(1,2),(2,3),(3,4),
+    (0,5),(5,6),(6,7),(7,8),
+    (5,9),(9,10),(10,11),(11,12),
+    (9,13),(13,14),(14,15),(15,16),
+    (13,17),(17,18),(18,19),(19,20),
+    (0,17),
+]
 
 
-while capture.isOpened():
-    
-    # Capture frames from the camera
-    ret, frame = capture.read()
-    # frame = cv2.resize(frame, (320, 160))
-    if(flip_frame):  frame = cv2.flip(frame, 1)
-    frame_copy = frame.copy()
-    
-    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-    # Neural network section (Hand tracking and finger counter)
-    # To improve performance the two network where activated every tot frame
-    
-    if(counter %  3 == 0):
-        # Predict hand position
-        boxes_predict = trackingHandWithRCNN(hand_tracker, frame, device)
-        
-        # Reset counter
-        counter = 1
-        
-        # Performe other action only if at least 1 hand is detected
-        if(len(boxes_predict) > 0): 
-            
-            if(len(boxes_predict) == 2):
-                # If the net detect 2 hands, hand1 will becoome the left one and hand2 the right one
-                if(boxes_predict[0,0] < boxes_predict[1,0]):
-                    hand1 = frame_copy[boxes_predict[0,1]:boxes_predict[0,3], boxes_predict[0,0]:boxes_predict[0,2]]
-                    hand2 = frame_copy[boxes_predict[1,1]:boxes_predict[1,3], boxes_predict[1,0]:boxes_predict[1,2]]
-                else:
-                    hand1 = frame_copy[boxes_predict[1,1]:boxes_predict[1,3], boxes_predict[1,0]:boxes_predict[1,2]]
-                    hand2 = frame_copy[boxes_predict[0,1]:boxes_predict[0,3], boxes_predict[0,0]:boxes_predict[0,2]]
-                
-                # Denoise both hand
-                if(flip_hand_1): hand1 = cv2.flip(hand1, 1)
-                hand1 = cv2.GaussianBlur(hand1, (3,3), 0)
-                hand2 = cv2.GaussianBlur(hand2, (3,3), 0)
-                
-                # Predict finger for both hand
-                finger_predicts_1 = predictFingers(finger_counter, hand1, device)
-                finger_predicts_2 = predictFingers(finger_counter, hand2, device)
-            else:
-                # If only 1 (or more than 2) hand are detected take only the first
-                hand1 = frame_copy[boxes_predict[0,1]:boxes_predict[0,3], boxes_predict[0,0]:boxes_predict[0,2]]
-                hand2 = np.zeros((10, 10, 3))
-                
-                # Denoise hand image
-                if(flip_hand_1 and boxes_predict[0, 2] < frame.shape[1] / 2): hand1 = cv2.flip(hand1, 1)
-                hand1 = cv2.GaussianBlur(hand1, (3,3), 0)
-                
-                # Predict fingers for the hand and set the other finger counter to -1
-                finger_predicts_1 = predictFingers(finger_counter, hand1, device)
-                finger_predicts_2 = -1
-                
-            
-            # Add finger number to the list
-            finger_list_1.append(finger_predicts_1)
-            finger_list_2.append(finger_predicts_2)
-            
-            # Mantain only the last five element
-            if(len(finger_list_1) > 5):
-                finger_list_1 = finger_list_1[-5:]
-            if(len(finger_list_2) > 5):
-                finger_list_2 = finger_list_2[-5:]
-                
-    # print("finger 1: ", finger_predicts_1)
-    cv2.putText(frame, "finger 1: " + str(finger_predicts_1), (50,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
-    
-    # if(finger_predicts_2 != -1): 
-        # print("   finger 2: ", finger_predicts_2)
-    cv2.putText(frame, "finger 2: " + str(finger_predicts_2), (50,100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
-                
-    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-    # Draw box around hand(s)
-    if(-1 not in boxes_predict):
-        for line in boxes_predict:
-            # Extract point
-            pt1 = (int(line[0]), int(line[1]))
-            pt2 = (int(line[2]), int(line[3]))
-            
-            # Draw rectangle
-            cv2.rectangle(frame, pt1, pt2, (0, 0, 255), thickness = 4)
-               
-            # Draw central point of the rectangle
-            cv2.circle(frame, centralPointInBox(line) , 10, [255,0,255], -1)
+def count_fingers(landmarks, handedness):
+    fingers = []
+    # Thumb: compare tip x vs IP joint x
+    if handedness == "Right":
+        fingers.append(1 if landmarks[4].x < landmarks[3].x else 0)
+    else:
+        fingers.append(1 if landmarks[4].x > landmarks[3].x else 0)
+    # Four fingers: tip y above PIP y = extended
+    for tip, pip in zip(FINGER_TIPS, FINGER_PIPS):
+        fingers.append(1 if landmarks[tip].y < landmarks[pip].y else 0)
+    return sum(fingers)
 
-    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-    # Show the frame (and optionally the hand image)
-    cv2.imshow("Full Frame", frame)
-    # cv2.imshow("Frame copy", frame_copy)
-    # cv2.imshow("Hand 1 (SX)", cv2.resize(hand1, (140, 140)))
-    # cv2.imshow("Hand 2 (DX)", hand2)
-    
-    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-    # Close the camera if 'q' is pressed
-    if cv2.waitKey(1) == ord('q'):
-        break
-    
-    # Advance counter
-    counter += 1
+
+def draw_hand(frame, landmarks, color=(0, 255, 0)):
+    h, w = frame.shape[:2]
+    pts = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks]
+    for a, b in HAND_CONNECTIONS:
+        cv2.line(frame, pts[a], pts[b], color, 2)
+    for pt in pts:
+        cv2.circle(frame, pt, 4, (255, 255, 255), -1)
+
+
+def get_bounding_box(landmarks, frame_shape):
+    h, w = frame_shape[:2]
+    xs = [lm.x * w for lm in landmarks]
+    ys = [lm.y * h for lm in landmarks]
+    x1 = max(0, int(min(xs)) - 20)
+    y1 = max(0, int(min(ys)) - 20)
+    x2 = min(w, int(max(xs)) + 20)
+    y2 = min(h, int(max(ys)) + 20)
+    return x1, y1, x2, y2
+
+
+options = HandLandmarkerOptions(
+    base_options=BaseOptions(model_asset_path=MODEL_PATH),
+    running_mode=RunningMode.IMAGE,
+    num_hands=2,
+    min_hand_detection_confidence=0.5,
+    min_hand_presence_confidence=0.5,
+    min_tracking_confidence=0.5,
+)
+
+capture = cv2.VideoCapture(0)
+
+with HandLandmarker.create_from_options(options) as detector:
+    while capture.isOpened():
+        ret, frame = capture.read()
+        if not ret:
+            break
+
+        frame = cv2.flip(frame, 1)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+
+        result = detector.detect(mp_image)
+
+        for i, (hand_landmarks, handedness_list) in enumerate(
+            zip(result.hand_landmarks, result.handedness)
+        ):
+            label = handedness_list[0].category_name
+            count = count_fingers(hand_landmarks, label)
+
+            draw_hand(frame, hand_landmarks)
+
+            x1, y1, x2, y2 = get_bounding_box(hand_landmarks, frame.shape)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+
+            cv2.putText(
+                frame, f"{label}: {count} fingers",
+                (50, 50 + i * 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3,
+            )
+
+        cv2.imshow("Hand Tracker", frame)
+        if cv2.waitKey(1) == ord('q'):
+            break
 
 capture.release()
 cv2.destroyAllWindows()
